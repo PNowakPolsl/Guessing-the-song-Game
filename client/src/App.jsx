@@ -171,7 +171,7 @@ export default function App() {
 
     socket.on('song_correct', ({ playerName }) => {
       hideJudgePanels();
-      hideNowPlaying();
+//      hideNowPlaying();
       if (roleRef.current === 'host') setHostStatus(`${playerName} zgadl utwor! Teraz os czasu.`);
     });
 
