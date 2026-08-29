@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 export default function HostScreen({
   pin,
@@ -29,6 +29,16 @@ export default function HostScreen({
   const [playlistUrl, setPlaylistUrl] = useState('');
   const [copied, setCopied] = useState(false);
 
+  // --- STANY DLA FISZEK ---
+  const [songRevealed, setSongRevealed] = useState(false);
+  const [yearRevealed, setYearRevealed] = useState(false);
+
+  // Automatyczny reset fiszek, gdy zmienia się piosenka (nowPlaying)
+  useEffect(() => {
+    setSongRevealed(false);
+    setYearRevealed(false);
+  }, [nowPlaying]);
+
   function handleCopy() {
     onCopyInviteLink();
     setCopied(true);
@@ -58,9 +68,9 @@ export default function HostScreen({
 
           {!spotifyConnected && (
             <div className="panel spotify-connect-box">
-              <p>Polacz sie ze Spotify, aby wybrac playliste.</p>
+              <p>Połącz się ze Spotify, aby wybrać playlistę.</p>
               <a className="btn btn-primary" href={spotifyLoginUrl} style={{ textDecoration: 'none' }}>
-                Polacz ze Spotify
+                Połącz ze Spotify
               </a>
             </div>
           )}
@@ -96,7 +106,7 @@ export default function HostScreen({
 
           {tracksLoaded > 0 && (
             <button className="btn btn-primary" onClick={onStartGame}>
-              🚀 Rozpocznij gre
+              🚀 Rozpocznij grę
             </button>
           )}
         </div>
@@ -106,7 +116,7 @@ export default function HostScreen({
         <div className="screen">
           <div className="panel">
             <p className="panel-label" style={{ textAlign: 'center' }}>
-              Tabela wynikow
+              Tabela wyników
             </p>
             <table className="scoreboard-table">
               <thead>
@@ -119,7 +129,7 @@ export default function HostScreen({
                 {sortedPlayers.map((p) => (
                   <tr key={p.id}>
                     <td>{p.name}</td>
-                    <td>{p.cardCount}/10</td>
+                    <td>{p.cardCount}</td>
                   </tr>
                 ))}
               </tbody>
@@ -132,24 +142,57 @@ export default function HostScreen({
 
           <div className="panel">
             <button className="btn btn-primary" disabled={playRandomDisabled} onClick={onPlayRandom}>
-              ▶️ Odtworz losowy utwor
+              ▶️ Odtwórz losowy utwór
             </button>
 
             {nowPlaying && (
-              <div className="now-playing">
-                <p className="now-playing-tag">Teraz gra (tylko Ty to widzisz)</p>
-                <p className="now-playing-title">{nowPlaying.title}</p>
-                <p className="now-playing-artist">{nowPlaying.artist}</p>
-                <p className="now-playing-year">{nowPlaying.year}</p>
+              <div className="now-playing" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+                <p className="now-playing-tag">Teraz gra (Fiszka)</p>
+                
+                {judgeTimelineVisible ? (
+                  // FAZA 2: Zgadywanie na osi czasu. Tytuł na stałe, Rok to fiszka.
+                  <>
+                    <div style={{ textAlign: 'center' }}>
+                      <p className="now-playing-title">{nowPlaying.title}</p>
+                      <p className="now-playing-artist">{nowPlaying.artist}</p>
+                    </div>
+                    
+                    {yearRevealed ? (
+                      <div onClick={() => setYearRevealed(false)} style={{ cursor: 'pointer', padding: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', width: '100%', textAlign: 'center' }}>
+                        <p className="now-playing-year">{nowPlaying.year}</p>
+                        <p style={{ fontSize: '11px', color: 'var(--spotify-text-subdued)', margin: '4px 0 0 0' }}>👆 Kliknij, aby zakryć</p>
+                      </div>
+                    ) : (
+                      <button className="btn btn-outline-green btn-sm" onClick={() => setYearRevealed(true)}>
+                        📅 Odkryj rok utworu
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  // FAZA 1: Zgadywanie utworu. Tytuł i autor to fiszka, rok jest niewidoczny.
+                  <>
+                    {songRevealed ? (
+                      <div onClick={() => setSongRevealed(false)} style={{ cursor: 'pointer', padding: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', width: '100%', textAlign: 'center' }}>
+                        <p className="now-playing-title">{nowPlaying.title}</p>
+                        <p className="now-playing-artist">{nowPlaying.artist}</p>
+                        <p style={{ fontSize: '11px', color: 'var(--spotify-text-subdued)', margin: '4px 0 0 0' }}>👆 Kliknij, aby zakryć</p>
+                      </div>
+                    ) : (
+                      <button className="btn btn-outline-green btn-sm" onClick={() => setSongRevealed(true)}>
+                        👀 Odkryj tytuł i wykonawcę
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
             )}
 
-            <div className="row-2">
+            <div className="row-2" style={{ marginTop: '10px' }}>
               <button className="btn btn-ghost" onClick={() => onTogglePlayback('pause')}>
                 ⏸ Pauza
               </button>
               <button className="btn btn-ghost" onClick={() => onTogglePlayback('play')}>
-                ▶️ Wznow
+                ▶️ Wznów
               </button>
             </div>
 
@@ -158,13 +201,13 @@ export default function HostScreen({
 
             {judgeSongVisible && (
               <div className="judge-panel song">
-                <p>{buzzedName} zgaduje utwor!</p>
+                <p>{buzzedName} zgaduje utwór!</p>
                 <div className="row-2">
                   <button className="btn btn-primary btn-sm" onClick={() => onJudgeSong(true)}>
                     ✅ Poprawnie
                   </button>
                   <button className="btn btn-danger btn-sm" onClick={() => onJudgeSong(false)}>
-                    ❌ Blednie
+                    ❌ Błędnie
                   </button>
                 </div>
               </div>
