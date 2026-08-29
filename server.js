@@ -43,7 +43,7 @@ function createRoom(hostSocketId) {
     usedTrackIds: new Set(),
     currentTrack: null,
     deviceId: null,
-    activeDeviceId: null, // NOWOŚĆ: Zapisujemy tu urządzenie, na którym faktycznie udało się odpalić muzykę
+    activeDeviceId: null,
     phase: 'lobby',
     buzzedPlayerId: null,
     excludedPlayerIds: new Set(),
@@ -294,61 +294,56 @@ io.on('connection', (socket) => {
     try {
       const token = await ensureFreshToken(room);
       
-      // NOWOŚĆ: Pobieramy urządzenia prosto od Spotify, żeby pominąć błędy przeglądarki
       const devResp = await axios.get('https://api.spotify.com/v1/me/player/devices', {
         headers: { Authorization: `Bearer ${token}` }
       });
       const devices = devResp.data.devices || [];
 
-      // Budujemy kolejkę priorytetową (co wypróbować jako pierwsze)
+      // KOLEJKA PRIORYTETOWA - Nowy mechanizm wybudzania uśpionych apek!
       let devicesToTry = [];
       
-      const active = devices.find(d => d.is_active);
-      if (active) devicesToTry.push(active.id); // 1. Apka, która gra
+      // 1. Najważniejsze: Próbujemy BEZ podawania ID. To zmusza serwery Spotify 
+      // do wysłania cichego powiadomienia wybudzającego (push) na Twój telefon!
+      devicesToTry.push(null);
       
+      // 2. Jeśli serwer nie domyślił się urządzenia, próbujemy użyć tego z poprzedniej rundy
+      if (room.activeDeviceId) devicesToTry.push(room.activeDeviceId);
+      
+      // 3. Aktywne urządzenie (jeśli widnieje)
+      const active = devices.find(d => d.is_active);
+      if (active && !devicesToTry.includes(active.id)) devicesToTry.push(active.id);
+      
+      // 4. Smartfony znalezione na liście
       const smartphones = devices.filter(d => d.type === 'Smartphone');
       for (let sp of smartphones) {
-        if (!devicesToTry.includes(sp.id)) devicesToTry.push(sp.id); // 2. Apka na telefonie w tle
-      }
-      
-      if (room.deviceId && !devicesToTry.includes(room.deviceId)) {
-        devicesToTry.push(room.deviceId); // 3. Odtwarzacz w przeglądarce
-      }
-
-      for (let d of devices) {
-        if (!devicesToTry.includes(d.id)) devicesToTry.push(d.id); // 4. Reszta (telewizory itp.)
-      }
-
-      if (devicesToTry.length === 0) {
-        room.usedTrackIds.delete(track.id); // Cofamy błąd
-        room.phase = 'lobby';
-        return cb && cb({ error: 'Spotify śpi. Zminimalizuj przeglądarkę, wejdź w apkę Spotify i wróć.' });
+        if (!devicesToTry.includes(sp.id)) devicesToTry.push(sp.id); 
       }
 
       let played = false;
-      let lastError = null;
+      let lastErrorMessage = '';
 
-      // Pętla ratunkowa - próbujemy po kolei każde urządzenie aż zaskoczy!
       for (let devId of devicesToTry) {
         try {
+          const deviceQuery = devId ? `?device_id=${devId}` : '';
           await axios.put(
-            `https://api.spotify.com/v1/me/player/play?device_id=${devId}`,
+            `https://api.spotify.com/v1/me/player/play${deviceQuery}`,
             { uris: [track.uri] },
             { headers: { Authorization: `Bearer ${token}` } }
           );
-          room.activeDeviceId = devId; // Zapisujemy zwycięzcę!
+          
+          if (devId) room.activeDeviceId = devId; // Aktualizujemy działające ID
           played = true;
-          break; // Odtwarza się, przerywamy pętlę.
+          break; // Odtwarza się! Uciekamy z pętli.
         } catch (err) {
-          lastError = err;
-          console.error(`Odrzucono na urządzeniu ${devId}:`, err.response?.data || err.message);
+          lastErrorMessage = err.response?.data?.error?.message || err.message;
+          console.error(`Odrzucono na urządzeniu ${devId || 'domyślnym'}:`, lastErrorMessage);
         }
       }
 
       if (!played) {
-        room.usedTrackIds.delete(track.id); // Cofamy, żeby nie zablokować gry
+        room.usedTrackIds.delete(track.id); // Cofamy piosenkę, żeby nie przepadła!
         room.phase = 'lobby';
-        return cb && cb({ error: 'Urządzenie zablokowało odtwarzanie. Upewnij się, że Spotify jest aktywne w tle.' });
+        return cb && cb({ error: 'Urządzenie uśpiło odtwarzacz. Niestety musisz wejść na sekundę w aplikację Spotify.' });
       }
 
     } catch (err) {
@@ -367,15 +362,15 @@ io.on('connection', (socket) => {
     cb && cb({ success: true });
   });
 
+  // Trik nr 2: Pauza i Play wysyłane W CIEMNO, bez sztywnego ID urządzenia.
   socket.on('toggle_playback', async ({ pin, action }) => {
     const room = rooms[pin];
     if (!room || socket.id !== room.hostSocketId) return;
     try {
       const token = await ensureFreshToken(room);
       const endpoint = action === 'pause' ? 'pause' : 'play';
-      const deviceQuery = room.activeDeviceId ? `?device_id=${room.activeDeviceId}` : '';
       await axios.put(
-        `https://api.spotify.com/v1/me/player/${endpoint}${deviceQuery}`,
+        `https://api.spotify.com/v1/me/player/${endpoint}`,
         {},
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -387,9 +382,8 @@ io.on('connection', (socket) => {
   async function pauseSpotifyPlayback(room) {
     try {
       const token = await ensureFreshToken(room);
-      const deviceQuery = room.activeDeviceId ? `?device_id=${room.activeDeviceId}` : '';
       await axios.put(
-        `https://api.spotify.com/v1/me/player/pause${deviceQuery}`,
+        `https://api.spotify.com/v1/me/player/pause`,
         {},
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -512,6 +506,7 @@ io.on('connection', (socket) => {
   });
 });
 
+// --- OBSŁUGA FRONTENDU (REACT) ---
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'client/dist', 'index.html'));
 });
