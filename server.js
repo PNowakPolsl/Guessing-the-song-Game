@@ -179,6 +179,24 @@ function extractPlaylistId(input) {
   return trimmed;
 }
 
+// --- FUNKCJA WSPOMAGAJĄCA: Szukanie urządzenia Spotify, gdy przeglądarka odmawia współpracy ---
+async function getTargetDevice(room, token) {
+  if (room.deviceId) return room.deviceId;
+  try {
+    const devResp = await axios.get('https://api.spotify.com/v1/me/player/devices', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (devResp.data.devices && devResp.data.devices.length > 0) {
+      // Szukamy aktywnego, a jak nie ma, to bierzemy pierwsze z brzegu
+      const active = devResp.data.devices.find(d => d.is_active) || devResp.data.devices[0];
+      return active.id;
+    }
+  } catch (e) {
+    console.error('Błąd pobierania urządzeń:', e.message);
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // SOCKET.IO — LOGIKA GRY
 // ---------------------------------------------------------------------------
@@ -292,8 +310,9 @@ io.on('connection', (socket) => {
 
     try {
       const token = await ensureFreshToken(room);
-      // Jeśli brak urządzenia z przeglądarki, puszczamy na aktywnej apce Spotify gracza
-      const deviceQuery = room.deviceId ? `?device_id=${room.deviceId}` : '';
+      const targetDevice = await getTargetDevice(room, token);
+      const deviceQuery = targetDevice ? `?device_id=${targetDevice}` : '';
+      
       await axios.put(
         `https://api.spotify.com/v1/me/player/play${deviceQuery}`,
         { uris: [track.uri] },
@@ -301,8 +320,12 @@ io.on('connection', (socket) => {
       );
     } catch (err) {
       console.error('Błąd odtwarzania:', err.response?.data || err.message);
-      return cb && cb({ error: 'Brak urządzenia! Zminimalizuj grę, otwórz aplikację Spotify, włącz na sekundę dowolną piosenkę i wróć tutaj.' });
+      // COFAMY usunięcie piosenki i resetujemy fazę, aby gra się nie zablokowała!
+      room.usedTrackIds.delete(track.id);
+      room.phase = 'lobby';
+      return cb && cb({ error: 'Brak urządzenia! Zminimalizuj grę, otwórz apkę Spotify, włącz muzykę i wróć.' });
     }
+    
     io.to(pin).emit('round_started');
     io.to(room.hostSocketId).emit('now_playing_host', {
       title: track.title,
@@ -318,7 +341,8 @@ io.on('connection', (socket) => {
     try {
       const token = await ensureFreshToken(room);
       const endpoint = action === 'pause' ? 'pause' : 'play';
-      const deviceQuery = room.deviceId ? `?device_id=${room.deviceId}` : '';
+      const targetDevice = await getTargetDevice(room, token);
+      const deviceQuery = targetDevice ? `?device_id=${targetDevice}` : '';
       await axios.put(
         `https://api.spotify.com/v1/me/player/${endpoint}${deviceQuery}`,
         {},
@@ -332,7 +356,8 @@ io.on('connection', (socket) => {
   async function pauseSpotifyPlayback(room) {
     try {
       const token = await ensureFreshToken(room);
-      const deviceQuery = room.deviceId ? `?device_id=${room.deviceId}` : '';
+      const targetDevice = await getTargetDevice(room, token);
+      const deviceQuery = targetDevice ? `?device_id=${targetDevice}` : '';
       await axios.put(
         `https://api.spotify.com/v1/me/player/pause${deviceQuery}`,
         {},

@@ -8,12 +8,10 @@ import ConfirmModal from './components/ConfirmModal.jsx';
 import GameSummaryModal from './components/GameSummaryModal.jsx';
 
 export default function App() {
-  // ---------- Ekran / rola ----------
   const [screen, setScreen] = useState('welcome');
   const roleRef = useRef(null);
   const currentPinRef = useRef(null);
 
-  // ---------- HOST ----------
   const [hostPin, setHostPin] = useState('----');
   const [inviteLink, setInviteLink] = useState('');
   const [spotifyLoginUrl, setSpotifyLoginUrl] = useState('#');
@@ -33,7 +31,6 @@ export default function App() {
 
   const spotifyPlayerRef = useRef(null);
 
-  // ---------- PLAYER ----------
   const [playerStatus, setPlayerStatus] = useState('Czekaj na hosta...');
   const [buzzerDisabled, setBuzzerDisabled] = useState(true);
   const [timelineVisible, setTimelineVisible] = useState(false);
@@ -43,7 +40,6 @@ export default function App() {
   const [myCardCount, setMyCardCount] = useState(0);
   const [myCardsDisplay, setMyCardsDisplay] = useState([]);
 
-  // ---------- WSPOLNE ----------
   const [joinError, setJoinError] = useState('');
   const [roundBanner, setRoundBanner] = useState({ visible: false, text: '' });
   const [endGameConfirmVisible, setEndGameConfirmVisible] = useState(false);
@@ -74,10 +70,8 @@ export default function App() {
     setPlayers(list);
   }
 
-  // ---------- Automatyczne wznawianie sesji (Problem na telefonach) ----------
   useEffect(() => {
     function handleReconnect() {
-      // Gdy telefon wybudza się z uśpienia i łączy ponownie, przypominamy serwerowi kim jesteśmy
       if (roleRef.current === 'host' && currentPinRef.current) {
         socket.emit('rejoin_host', { pin: currentPinRef.current });
       }
@@ -86,7 +80,6 @@ export default function App() {
     return () => socket.off('connect', handleReconnect);
   }, []);
 
-  // ---------- Spotify Web Playback SDK (tylko host) ----------
   function initializePlayer(pin) {
     if (spotifyPlayerRef.current) return;
     const player = new window.Spotify.Player({
@@ -122,7 +115,6 @@ export default function App() {
     }
   }
 
-  // ---------- Rejestracja nasłuchiwaczy socket.io ----------
   useEffect(() => {
     socket.on('player_ready', () => {
       setHostStatus('Odtwarzacz Spotify gotowy. Możesz zacząć grę!');
@@ -312,7 +304,6 @@ export default function App() {
       socket.off('timer_start');
       socket.off('time_up');
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function handleCreateRoom() {
@@ -361,12 +352,16 @@ export default function App() {
     setHostPhase('game');
   }
 
+  // --- POPRAWKA: Przycisk odzyskuje sprawność w razie błędu! ---
   function handlePlayRandom() {
+    setPlayRandomDisabled(true); 
     socket.emit('play_random_track', { pin: currentPinRef.current }, (res) => {
-      if (res && res.error) setHostStatus(res.error);
+      if (res && res.error) {
+        setHostStatus(res.error);
+        setPlayRandomDisabled(false); // ODBLOKOWUJEMY PRZYCISK
+      }
     });
     hideJudgePanels();
-    setPlayRandomDisabled(true);
   }
 
   function handleTogglePlayback(action) {
