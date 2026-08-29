@@ -9,8 +9,8 @@ import GameSummaryModal from './components/GameSummaryModal.jsx';
 
 export default function App() {
   // ---------- Ekran / rola ----------
-  const [screen, setScreen] = useState('welcome'); // 'welcome' | 'host' | 'player'
-  const roleRef = useRef(null); // 'host' | 'player' - odpowiednik zmiennej globalnej `role` z app.js
+  const [screen, setScreen] = useState('welcome');
+  const roleRef = useRef(null);
   const currentPinRef = useRef(null);
 
   // ---------- HOST ----------
@@ -21,7 +21,7 @@ export default function App() {
   const [playlistStatus, setPlaylistStatus] = useState('');
   const [tracksLoaded, setTracksLoaded] = useState(0);
   const [players, setPlayers] = useState([]);
-  const [hostPhase, setHostPhase] = useState('lobby'); // 'lobby' | 'game'
+  const [hostPhase, setHostPhase] = useState('lobby');
   const [nowPlaying, setNowPlaying] = useState(null);
   const [hostStatus, setHostStatus] = useState('');
   const [hostTimer, setHostTimer] = useState(null);
@@ -50,8 +50,6 @@ export default function App() {
   const [gameSummary, setGameSummary] = useState({ visible: false, standings: [], winners: [] });
 
   const localTimerIntervalRef = useRef(null);
-
-  // ---------- Prefill pola PIN przy dolaczaniu z linku zaproszenia ----------
   const [joinPrefillPin, setJoinPrefill] = useState('');
 
   function clearLocalTimer() {
@@ -76,6 +74,18 @@ export default function App() {
     setPlayers(list);
   }
 
+  // ---------- Automatyczne wznawianie sesji (Problem na telefonach) ----------
+  useEffect(() => {
+    function handleReconnect() {
+      // Gdy telefon wybudza się z uśpienia i łączy ponownie, przypominamy serwerowi kim jesteśmy
+      if (roleRef.current === 'host' && currentPinRef.current) {
+        socket.emit('rejoin_host', { pin: currentPinRef.current });
+      }
+    }
+    socket.on('connect', handleReconnect);
+    return () => socket.off('connect', handleReconnect);
+  }, []);
+
   // ---------- Spotify Web Playback SDK (tylko host) ----------
   function initializePlayer(pin) {
     if (spotifyPlayerRef.current) return;
@@ -85,7 +95,7 @@ export default function App() {
         fetch(`/auth/token/${pin}`)
           .then((r) => r.json())
           .then((d) => cb(d.access_token))
-          .catch((err) => console.error('Blad pobierania tokena:', err));
+          .catch((err) => console.error('Błąd pobierania tokena:', err));
       },
       volume: 0.8,
     });
@@ -112,10 +122,10 @@ export default function App() {
     }
   }
 
-  // ---------- Rejestracja nasluchiwaczy socket.io (raz, przy montowaniu) ----------
+  // ---------- Rejestracja nasłuchiwaczy socket.io ----------
   useEffect(() => {
     socket.on('player_ready', () => {
-      setHostStatus('Odtwarzacz Spotify gotowy. Mozesz zaczac gre!');
+      setHostStatus('Odtwarzacz Spotify gotowy. Możesz zacząć grę!');
     });
 
     socket.on('now_playing_host', ({ title, artist, year }) => {
@@ -128,12 +138,12 @@ export default function App() {
 
     socket.on('round_started', () => {
       if (roleRef.current === 'player') {
-        setPlayerStatus('Utwor leci! Kto pierwszy?');
+        setPlayerStatus('Utwór leci! Kto pierwszy?');
         setBuzzerDisabled(false);
         setTimelineVisible(false);
       }
       if (roleRef.current === 'host') {
-        setHostStatus('Utwor leci - gracze moga wcisnac buzzer.');
+        setHostStatus('Utwór leci - gracze mogą wcisnąć buzzer.');
       }
     });
 
@@ -141,7 +151,7 @@ export default function App() {
       setPlayRandomDisabled(true);
       if (roleRef.current === 'player') {
         setBuzzerDisabled(true);
-        setPlayerStatus(playerId === socket.id ? 'Twoja kolej! Powiedz Tytul i Wykonawce!' : `${playerName} zgaduje...`);
+        setPlayerStatus(playerId === socket.id ? 'Twoja kolej! Powiedz Tytuł i Wykonawcę!' : `${playerName} zgaduje...`);
       }
       if (roleRef.current === 'host') {
         setHostStatus('Muzyka zatrzymana automatycznie.');
@@ -157,26 +167,25 @@ export default function App() {
         const iAmExcluded = Array.isArray(excludedPlayerIds) && excludedPlayerIds.includes(socket.id);
         if (iAmExcluded) {
           setBuzzerDisabled(true);
-          setPlayerStatus('Zle! Czekasz na kolejna runde.');
+          setPlayerStatus('Źle! Czekasz na kolejną rundę.');
         } else {
           setBuzzerDisabled(false);
-          setPlayerStatus('Zle! Sprobuj ponownie, kto pierwszy?');
+          setPlayerStatus('Źle! Spróbuj ponownie, kto pierwszy?');
         }
       }
       if (roleRef.current === 'host') {
         hideJudgePanels();
-        setHostStatus('Buzzer odblokowany dla pozostalych graczy.');
+        setHostStatus('Buzzer odblokowany dla pozostałych graczy.');
       }
     });
 
     socket.on('song_correct', ({ playerName }) => {
       hideJudgePanels();
-//      hideNowPlaying();
-      if (roleRef.current === 'host') setHostStatus(`${playerName} zgadl utwor! Teraz os czasu.`);
+      if (roleRef.current === 'host') setHostStatus(`${playerName} zgadł utwór! Teraz oś czasu.`);
     });
 
     socket.on('enter_timeline_phase', ({ track, myCards }) => {
-      setPlayerStatus('Poprawnie! Gdzie na osi czasu jest ten utwor?');
+      setPlayerStatus('Poprawnie! Gdzie na osi czasu jest ten utwór?');
       setCurrentGuessText(`${track.title} - ${track.artist}`);
       setTimelineVisible(true);
       setMyTimelineCards(myCards);
@@ -195,17 +204,17 @@ export default function App() {
       clearLocalTimer();
 
       const text = correct
-        ? `\u2705 ${playerName} zdobywa karte: ${track.title} (${track.year})!`
-        : `\u274C Brak punktu. To bylo: ${track.title} - ${track.artist} (${track.year}).`;
+        ? `✅ ${playerName} zdobywa kartę: ${track.title} (${track.year})!`
+        : `❌ Brak punktu. To było: ${track.title} - ${track.artist} (${track.year}).`;
       setRoundBanner({ visible: true, text });
       setTimeout(() => setRoundBanner((b) => ({ ...b, visible: false })), 4000);
 
       if (roleRef.current === 'host') {
         renderPlayers(updatedPlayers);
-        setHostStatus('Gotowy na kolejna runde.');
+        setHostStatus('Gotowy na kolejną rundę.');
       }
       if (roleRef.current === 'player') {
-        setPlayerStatus('Czekaj na kolejny utwor...');
+        setPlayerStatus('Czekaj na kolejny utwór...');
         setTimelineVisible(false);
         const me = updatedPlayers.find((p) => p.id === socket.id);
         if (me) {
@@ -244,15 +253,14 @@ export default function App() {
       setPlayRandomDisabled(false);
       if (roleRef.current === 'player') {
         setBuzzerDisabled(true);
-        setPlayerStatus('Czas minal! Czekaj na kolejny utwor.');
+        setPlayerStatus('Czas minął! Czekaj na kolejny utwór.');
         setTimelineVisible(false);
       }
       if (roleRef.current === 'host') {
-        setHostStatus('Czas minal - brak punktu w tej rundzie.');
+        setHostStatus('Czas minął - brak punktu w tej rundzie.');
       }
     });
 
-    // ---------- Powrot z autoryzacji Spotify / link zaproszenia ----------
     const params = new URLSearchParams(window.location.search);
     const room = params.get('room');
     const isHost = params.get('host');
@@ -264,7 +272,7 @@ export default function App() {
 
     if (room && isHost) {
       socket.emit('rejoin_host', { pin: room }, (res) => {
-        if (res.error) {
+        if (res && res.error) {
           alert(res.error);
           window.location.href = '/';
           return;
@@ -282,7 +290,7 @@ export default function App() {
           connectSpotifyPlayer(res.pin);
         }
         if (res.tracksLoaded > 0) {
-          setPlaylistStatus(`Wczytano ${res.tracksLoaded} utworow.`);
+          setPlaylistStatus(`Wczytano ${res.tracksLoaded} utworów.`);
           setTracksLoaded(res.tracksLoaded);
         }
         window.history.replaceState({}, document.title, '/');
@@ -307,7 +315,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---------- Akcje: EKRAN POWITALNY ----------
   function handleCreateRoom() {
     socket.emit('create_room', (res) => {
       roleRef.current = 'host';
@@ -322,7 +329,7 @@ export default function App() {
   function handleJoinRoom(name, pin) {
     setJoinError('');
     if (!name || pin.length !== 4) {
-      setJoinError('Podaj imie i 4-cyfrowy PIN.');
+      setJoinError('Podaj imię i 4-cyfrowy PIN.');
       return;
     }
     socket.emit('join_room', { pin, name }, (res) => {
@@ -332,12 +339,11 @@ export default function App() {
       }
       roleRef.current = 'player';
       currentPinRef.current = pin;
-      setPlayerStatus('Czekaj, az host odtworzy utwor...');
+      setPlayerStatus('Czekaj, aż host odtworzy utwór...');
       setScreen('player');
     });
   }
 
-  // ---------- Akcje: HOST ----------
   function handleLoadPlaylist(playlistUrl) {
     if (!playlistUrl) return;
     setPlaylistStatus('Wczytywanie...');
@@ -346,7 +352,7 @@ export default function App() {
         setPlaylistStatus(res.error);
         return;
       }
-      setPlaylistStatus(`Wczytano ${res.count} utworow z latami wydania.`);
+      setPlaylistStatus(`Wczytano ${res.count} utworów z latami wydania.`);
       setTracksLoaded(res.count);
     });
   }
@@ -396,7 +402,6 @@ export default function App() {
     });
   }
 
-  // ---------- Akcje: GRACZ ----------
   function handleBuzz() {
     socket.emit('buzz', { pin: currentPinRef.current });
     setBuzzerDisabled(true);
@@ -465,10 +470,10 @@ export default function App() {
 
       <ConfirmModal
         visible={endGameConfirmVisible}
-        title="Zakonczyc gre?"
-        message="Czy na pewno konczymy gre? Ta akcja zakonczy rozgrywke dla wszystkich graczy i pokaze wyniki koncowe."
-        confirmLabel="Tak, zakoncz"
-        cancelLabel="Wroc do gry"
+        title="Zakończyć grę?"
+        message="Czy na pewno kończymy grę? Ta akcja zakończy rozgrywkę dla wszystkich graczy i pokaże wyniki końcowe."
+        confirmLabel="Tak, zakończ"
+        cancelLabel="Wróć do gry"
         onConfirm={handleConfirmEndGame}
         onCancel={handleCancelEndGame}
       />

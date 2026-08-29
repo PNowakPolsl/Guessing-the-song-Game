@@ -223,7 +223,7 @@ io.on('connection', (socket) => {
 
   socket.on('load_playlist', async ({ pin, playlistUrl }, cb) => {
     const room = rooms[pin];
-    if (!room || socket.id !== room.hostSocketId) return cb({ error: 'Brak uprawnień.' });
+    if (!room || socket.id !== room.hostSocketId) return cb({ error: 'Brak uprawnień. Zostałeś rozłączony, odśwież stronę.' });
     try {
       const token = await ensureFreshToken(room);
       const playlistId = extractPlaylistId(playlistUrl);
@@ -278,8 +278,8 @@ io.on('connection', (socket) => {
 
   socket.on('play_random_track', async ({ pin }, cb) => {
     const room = rooms[pin];
-    if (!room || socket.id !== room.hostSocketId) return cb && cb({ error: 'Brak uprawnień.' });
-    if (!room.deviceId) return cb && cb({ error: 'Odtwarzacz Spotify nie jest jeszcze gotowy.' });
+    if (!room || socket.id !== room.hostSocketId) return cb && cb({ error: 'Brak uprawnień. Odśwież stronę.' });
+    
     const available = room.tracks.filter((t) => !room.usedTrackIds.has(t.id));
     if (available.length === 0) return cb && cb({ error: 'Wszystkie utwory z playlisty zostały już wykorzystane.' });
 
@@ -292,14 +292,16 @@ io.on('connection', (socket) => {
 
     try {
       const token = await ensureFreshToken(room);
+      // Jeśli brak urządzenia z przeglądarki, puszczamy na aktywnej apce Spotify gracza
+      const deviceQuery = room.deviceId ? `?device_id=${room.deviceId}` : '';
       await axios.put(
-        `https://api.spotify.com/v1/me/player/play?device_id=${room.deviceId}`,
+        `https://api.spotify.com/v1/me/player/play${deviceQuery}`,
         { uris: [track.uri] },
         { headers: { Authorization: `Bearer ${token}` } }
       );
     } catch (err) {
       console.error('Błąd odtwarzania:', err.response?.data || err.message);
-      return cb && cb({ error: 'Błąd odtwarzania. Upewnij się, że masz Spotify Premium.' });
+      return cb && cb({ error: 'Brak urządzenia! Zminimalizuj grę, otwórz aplikację Spotify, włącz na sekundę dowolną piosenkę i wróć tutaj.' });
     }
     io.to(pin).emit('round_started');
     io.to(room.hostSocketId).emit('now_playing_host', {
@@ -312,12 +314,13 @@ io.on('connection', (socket) => {
 
   socket.on('toggle_playback', async ({ pin, action }) => {
     const room = rooms[pin];
-    if (!room || socket.id !== room.hostSocketId || !room.deviceId) return;
+    if (!room || socket.id !== room.hostSocketId) return;
     try {
       const token = await ensureFreshToken(room);
       const endpoint = action === 'pause' ? 'pause' : 'play';
+      const deviceQuery = room.deviceId ? `?device_id=${room.deviceId}` : '';
       await axios.put(
-        `https://api.spotify.com/v1/me/player/${endpoint}?device_id=${room.deviceId}`,
+        `https://api.spotify.com/v1/me/player/${endpoint}${deviceQuery}`,
         {},
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -327,11 +330,11 @@ io.on('connection', (socket) => {
   });
 
   async function pauseSpotifyPlayback(room) {
-    if (!room.deviceId) return;
     try {
       const token = await ensureFreshToken(room);
+      const deviceQuery = room.deviceId ? `?device_id=${room.deviceId}` : '';
       await axios.put(
-        `https://api.spotify.com/v1/me/player/pause?device_id=${room.deviceId}`,
+        `https://api.spotify.com/v1/me/player/pause${deviceQuery}`,
         {},
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -455,7 +458,6 @@ io.on('connection', (socket) => {
 });
 
 // --- OBSŁUGA FRONTENDU (REACT) ---
-// Musi to być na samym końcu, przed server.listen!
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'client/dist', 'index.html'));
 });
