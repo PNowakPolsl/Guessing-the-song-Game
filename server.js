@@ -43,6 +43,7 @@ function createRoom(hostSocketId) {
     usedTrackIds: new Set(),
     currentTrack: null,
     deviceId: null,
+    activeDeviceId: null, // NOWOŚĆ: Zapisujemy tu urządzenie, na którym faktycznie udało się odpalić muzykę
     phase: 'lobby',
     buzzedPlayerId: null,
     excludedPlayerIds: new Set(),
@@ -179,24 +180,6 @@ function extractPlaylistId(input) {
   return trimmed;
 }
 
-// --- FUNKCJA WSPOMAGAJĄCA: Szukanie urządzenia Spotify, gdy przeglądarka odmawia współpracy ---
-async function getTargetDevice(room, token) {
-  if (room.deviceId) return room.deviceId;
-  try {
-    const devResp = await axios.get('https://api.spotify.com/v1/me/player/devices', {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    if (devResp.data.devices && devResp.data.devices.length > 0) {
-      // Szukamy aktywnego, a jak nie ma, to bierzemy pierwsze z brzegu
-      const active = devResp.data.devices.find(d => d.is_active) || devResp.data.devices[0];
-      return active.id;
-    }
-  } catch (e) {
-    console.error('Błąd pobierania urządzeń:', e.message);
-  }
-  return null;
-}
-
 // ---------------------------------------------------------------------------
 // SOCKET.IO — LOGIKA GRY
 // ---------------------------------------------------------------------------
@@ -273,7 +256,7 @@ io.on('connection', (socket) => {
 
       if (!sawAnyItems) {
         return cb({
-          error: 'Spotify nie zwrócił zawartości tej playlisty. Upewnij się, że używasz konta powiązanego z aplikacją.',
+          error: 'Spotify nie zwrócił zawartości playlisty. Upewnij się, że masz do niej dostęp.',
         });
       }
 
@@ -310,20 +293,69 @@ io.on('connection', (socket) => {
 
     try {
       const token = await ensureFreshToken(room);
-      const targetDevice = await getTargetDevice(room, token);
-      const deviceQuery = targetDevice ? `?device_id=${targetDevice}` : '';
       
-      await axios.put(
-        `https://api.spotify.com/v1/me/player/play${deviceQuery}`,
-        { uris: [track.uri] },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      // NOWOŚĆ: Pobieramy urządzenia prosto od Spotify, żeby pominąć błędy przeglądarki
+      const devResp = await axios.get('https://api.spotify.com/v1/me/player/devices', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const devices = devResp.data.devices || [];
+
+      // Budujemy kolejkę priorytetową (co wypróbować jako pierwsze)
+      let devicesToTry = [];
+      
+      const active = devices.find(d => d.is_active);
+      if (active) devicesToTry.push(active.id); // 1. Apka, która gra
+      
+      const smartphones = devices.filter(d => d.type === 'Smartphone');
+      for (let sp of smartphones) {
+        if (!devicesToTry.includes(sp.id)) devicesToTry.push(sp.id); // 2. Apka na telefonie w tle
+      }
+      
+      if (room.deviceId && !devicesToTry.includes(room.deviceId)) {
+        devicesToTry.push(room.deviceId); // 3. Odtwarzacz w przeglądarce
+      }
+
+      for (let d of devices) {
+        if (!devicesToTry.includes(d.id)) devicesToTry.push(d.id); // 4. Reszta (telewizory itp.)
+      }
+
+      if (devicesToTry.length === 0) {
+        room.usedTrackIds.delete(track.id); // Cofamy błąd
+        room.phase = 'lobby';
+        return cb && cb({ error: 'Spotify śpi. Zminimalizuj przeglądarkę, wejdź w apkę Spotify i wróć.' });
+      }
+
+      let played = false;
+      let lastError = null;
+
+      // Pętla ratunkowa - próbujemy po kolei każde urządzenie aż zaskoczy!
+      for (let devId of devicesToTry) {
+        try {
+          await axios.put(
+            `https://api.spotify.com/v1/me/player/play?device_id=${devId}`,
+            { uris: [track.uri] },
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          room.activeDeviceId = devId; // Zapisujemy zwycięzcę!
+          played = true;
+          break; // Odtwarza się, przerywamy pętlę.
+        } catch (err) {
+          lastError = err;
+          console.error(`Odrzucono na urządzeniu ${devId}:`, err.response?.data || err.message);
+        }
+      }
+
+      if (!played) {
+        room.usedTrackIds.delete(track.id); // Cofamy, żeby nie zablokować gry
+        room.phase = 'lobby';
+        return cb && cb({ error: 'Urządzenie zablokowało odtwarzanie. Upewnij się, że Spotify jest aktywne w tle.' });
+      }
+
     } catch (err) {
-      console.error('Błąd odtwarzania:', err.response?.data || err.message);
-      // COFAMY usunięcie piosenki i resetujemy fazę, aby gra się nie zablokowała!
+      console.error('Główny błąd odtwarzania:', err.message);
       room.usedTrackIds.delete(track.id);
       room.phase = 'lobby';
-      return cb && cb({ error: 'Brak urządzenia! Zminimalizuj grę, otwórz apkę Spotify, włącz muzykę i wróć.' });
+      return cb && cb({ error: 'Błąd połączenia. Spróbuj ponownie.' });
     }
     
     io.to(pin).emit('round_started');
@@ -341,8 +373,7 @@ io.on('connection', (socket) => {
     try {
       const token = await ensureFreshToken(room);
       const endpoint = action === 'pause' ? 'pause' : 'play';
-      const targetDevice = await getTargetDevice(room, token);
-      const deviceQuery = targetDevice ? `?device_id=${targetDevice}` : '';
+      const deviceQuery = room.activeDeviceId ? `?device_id=${room.activeDeviceId}` : '';
       await axios.put(
         `https://api.spotify.com/v1/me/player/${endpoint}${deviceQuery}`,
         {},
@@ -356,8 +387,7 @@ io.on('connection', (socket) => {
   async function pauseSpotifyPlayback(room) {
     try {
       const token = await ensureFreshToken(room);
-      const targetDevice = await getTargetDevice(room, token);
-      const deviceQuery = targetDevice ? `?device_id=${targetDevice}` : '';
+      const deviceQuery = room.activeDeviceId ? `?device_id=${room.activeDeviceId}` : '';
       await axios.put(
         `https://api.spotify.com/v1/me/player/pause${deviceQuery}`,
         {},
@@ -482,7 +512,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// --- OBSŁUGA FRONTENDU (REACT) ---
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'client/dist', 'index.html'));
 });
