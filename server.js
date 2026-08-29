@@ -21,12 +21,6 @@ const TIMELINE_GUESS_SECONDS = 30;
 
 // ---------------------------------------------------------------------------
 // STAN GRY W PAMIĘCI SERWERA
-// rooms[pin] = {
-//   pin, hostSocketId, hostSpotify: {access_token, refresh_token, expires_at},
-//   players: { socketId: {id, name, cards:[{title,artist,year}]} },
-//   tracks: [{id,uri,title,artist,year,imageUrl}], usedTrackIds: Set,
-//   currentTrack, deviceId, phase, buzzedPlayerId, timer, timeLeft
-// }
 // ---------------------------------------------------------------------------
 const rooms = {};
 
@@ -49,9 +43,9 @@ function createRoom(hostSocketId) {
     usedTrackIds: new Set(),
     currentTrack: null,
     deviceId: null,
-    phase: 'lobby', // lobby | buzzer | guessing_song | timeline
+    phase: 'lobby',
     buzzedPlayerId: null,
-    excludedPlayerIds: new Set(), // gracze, którzy już źle zgadli w TEJ rundzie
+    excludedPlayerIds: new Set(),
     timer: null,
     timeLeft: 0,
   };
@@ -167,7 +161,6 @@ async function ensureFreshToken(room) {
   return room.hostSpotify.access_token;
 }
 
-// Frontend (Web Playback SDK) potrzebuje świeżego tokena dostępu.
 app.get('/auth/token/:pin', async (req, res) => {
   const room = rooms[req.params.pin];
   if (!room) return res.status(404).json({ error: 'Pokój nie istnieje.' });
@@ -235,17 +228,14 @@ io.on('connection', (socket) => {
       const token = await ensureFreshToken(room);
       const playlistId = extractPlaylistId(playlistUrl);
       let tracks = [];
-      // Od lutego/marca 2026 Spotify zmieniło endpoint z /tracks na /items
-      // (patrz: February 2026 Web API Dev Mode migration guide).
       let url = `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=100`;
       let sawAnyItems = false;
       while (url && tracks.length < 300) {
         const resp = await axios.get(url, { headers: { Authorization: `Bearer ${token}` } });
         const items = resp.data.items;
-        if (!items) break; // brak pola "items" = playlista nie jest Twoja (patrz obsługa błędu niżej)
+        if (!items) break; 
         sawAnyItems = true;
         for (const entry of items) {
-          // Nazwa pola zmieniła się z "track" na "item" w nowym API; obsługujemy oba na wszelki wypadek.
           const t = entry.item || entry.track;
           if (!t || !t.uri || !t.id) continue;
           const yearStr = (t.album && t.album.release_date ? t.album.release_date : '').split('-')[0];
@@ -265,11 +255,7 @@ io.on('connection', (socket) => {
 
       if (!sawAnyItems) {
         return cb({
-          error:
-            'Spotify nie zwrócił zawartości tej playlisty. Od marca 2026 aplikacje w trybie Development Mode ' +
-            'mogą pobierać utwory TYLKO z playlist, których host jest właścicielem lub współtwórcą. ' +
-            'Zaloguj się na Spotify jako host, stwórz własną playlistę (lub poproś o dodanie jako współtwórca ' +
-            'do istniejącej) i wklej link do niej.',
+          error: 'Spotify nie zwrócił zawartości tej playlisty. Upewnij się, że używasz konta powiązanego z aplikacją.',
         });
       }
 
@@ -278,14 +264,6 @@ io.on('connection', (socket) => {
       cb({ success: true, count: tracks.length });
     } catch (err) {
       console.error('Błąd pobierania playlisty:', err.response?.data || err.message);
-      const status = err.response?.status;
-      if (status === 403 || status === 404) {
-        return cb({
-          error:
-            'Brak dostępu do tej playlisty. Od marca 2026 Spotify pozwala aplikacjom w trybie Development Mode ' +
-            'pobierać utwory tylko z playlist, których host jest właścicielem lub współtwórcą. Użyj własnej playlisty.',
-        });
-      }
       cb({ error: 'Nie udało się pobrać playlisty. Sprawdź link/URI.' });
     }
   });
@@ -301,7 +279,7 @@ io.on('connection', (socket) => {
   socket.on('play_random_track', async ({ pin }, cb) => {
     const room = rooms[pin];
     if (!room || socket.id !== room.hostSocketId) return cb && cb({ error: 'Brak uprawnień.' });
-    if (!room.deviceId) return cb && cb({ error: 'Odtwarzacz Spotify nie jest jeszcze gotowy (wymagane Spotify Premium).' });
+    if (!room.deviceId) return cb && cb({ error: 'Odtwarzacz Spotify nie jest jeszcze gotowy.' });
     const available = room.tracks.filter((t) => !room.usedTrackIds.has(t.id));
     if (available.length === 0) return cb && cb({ error: 'Wszystkie utwory z playlisty zostały już wykorzystane.' });
 
@@ -310,7 +288,7 @@ io.on('connection', (socket) => {
     room.currentTrack = track;
     room.phase = 'buzzer';
     room.buzzedPlayerId = null;
-    room.excludedPlayerIds = new Set(); // nowa runda — nikt jeszcze nie próbował
+    room.excludedPlayerIds = new Set(); 
 
     try {
       const token = await ensureFreshToken(room);
@@ -321,7 +299,7 @@ io.on('connection', (socket) => {
       );
     } catch (err) {
       console.error('Błąd odtwarzania:', err.response?.data || err.message);
-      return cb && cb({ error: 'Błąd odtwarzania. Upewnij się, że masz Spotify Premium i aktywne urządzenie.' });
+      return cb && cb({ error: 'Błąd odtwarzania. Upewnij się, że masz Spotify Premium.' });
     }
     io.to(pin).emit('round_started');
     io.to(room.hostSocketId).emit('now_playing_host', {
@@ -365,14 +343,14 @@ io.on('connection', (socket) => {
   socket.on('buzz', async ({ pin }) => {
     const room = rooms[pin];
     if (!room || room.phase !== 'buzzer') return;
-    if (room.excludedPlayerIds.has(socket.id)) return; // już źle zgadywał w tej rundzie
+    if (room.excludedPlayerIds.has(socket.id)) return;
     const player = room.players[socket.id];
     if (!player) return;
     room.phase = 'guessing_song';
     room.buzzedPlayerId = socket.id;
     io.to(pin).emit('buzzer_locked', { playerId: socket.id, playerName: player.name });
     startTimer(room, SONG_GUESS_SECONDS, 'song_guess');
-    await pauseSpotifyPlayback(room); // muzyka zatrzymuje się automatycznie po wciśnięciu buzzera
+    await pauseSpotifyPlayback(room); 
   });
 
   socket.on('judge_song', ({ pin, correct }) => {
@@ -396,14 +374,13 @@ io.on('connection', (socket) => {
       });
       startTimer(room, TIMELINE_GUESS_SECONDS, 'timeline_guess');
     } else {
-      room.excludedPlayerIds.add(playerId); // ten gracz nie może już zgadywać w tej rundzie
+      room.excludedPlayerIds.add(playerId); 
       room.buzzedPlayerId = null;
 
       const activePlayers = Object.keys(room.players);
       const everyoneExcluded = activePlayers.length > 0 && activePlayers.every((id) => room.excludedPlayerIds.has(id));
 
       if (everyoneExcluded) {
-        // Wszyscy już próbowali i nikt nie zgadł — runda kończy się bez punktu.
         room.phase = 'lobby';
         io.to(pin).emit('round_result', {
           playerId: null,
@@ -443,7 +420,6 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Host konczy gre reczne w dowolnym momencie -- liczymy ranking koncowy.
   socket.on('end_game', ({ pin }, cb) => {
     const room = rooms[pin];
     if (!room || socket.id !== room.hostSocketId) return cb && cb({ error: 'Brak uprawnien.' });
@@ -475,9 +451,13 @@ io.on('connection', (socket) => {
       delete room.players[socket.id];
       io.to(pin).emit('players_update', publicPlayers(room));
     }
-    // Jeśli rozłączył się host, pokój pozostaje w pamięci — host może wrócić
-    // (np. po przekierowaniu OAuth) dzięki zdarzeniu 'rejoin_host'.
   });
 });
 
-server.listen(PORT, () => console.log(`Serwer Hitster działa na http://localhost:${PORT}`));
+// --- OBSŁUGA FRONTENDU (REACT) ---
+// Musi to być na samym końcu, przed server.listen!
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'client/dist', 'index.html'));
+});
+
+server.listen(PORT, () => console.log(`Serwer Hitster działa na porcie ${PORT}`));
