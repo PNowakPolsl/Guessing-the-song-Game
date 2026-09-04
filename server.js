@@ -62,6 +62,59 @@ function publicPlayers(room) {
   }));
 }
 
+// --- NOWA LOGIKA CZASU (server.js) ---
+
+function handleTimeUp(room, type) {
+  clearRoomTimer(room);
+  const playerId = room.buzzedPlayerId;
+  const player = playerId ? room.players[playerId] : null;
+
+  if (type === 'song_guess' && room.phase === 'guessing_song') {
+    // Ktoś nie zdążył zgadnąć piosenki -> traktujemy to jak błąd
+    if (playerId) room.excludedPlayerIds.add(playerId);
+    room.buzzedPlayerId = null;
+
+    const activePlayers = Object.keys(room.players);
+    const everyoneExcluded = activePlayers.length > 0 && activePlayers.every((id) => room.excludedPlayerIds.has(id));
+
+    if (everyoneExcluded) {
+      // Wszyscy już próbowali lub nikogo nie ma
+      room.phase = 'lobby';
+      io.to(room.pin).emit('round_result', {
+        playerId: null,
+        playerName: null,
+        correct: false,
+        track: room.currentTrack,
+        players: publicPlayers(room),
+      });
+    } else {
+      // Są inni gracze, odblokowujemy buzzer dla reszty!
+      room.phase = 'buzzer';
+      io.to(room.pin).emit('buzzer_unlocked', { 
+        excludedPlayerIds: [...room.excludedPlayerIds],
+        timeout: true, // Flaga dla frontendu, żeby wiedział, że to z powodu czasu
+        failedPlayerName: player ? player.name : ''
+      });
+    }
+  } else if (type === 'timeline_guess' && room.phase === 'timeline') {
+    // Ktoś nie zdążył ułożyć na osi czasu -> traci punkt
+    room.phase = 'lobby';
+    room.buzzedPlayerId = null;
+    io.to(room.pin).emit('round_result', {
+      playerId,
+      playerName: player ? player.name : null,
+      correct: false,
+      track: room.currentTrack,
+      players: publicPlayers(room),
+    });
+  } else {
+    // Awaryjne zakończenie czasu
+    room.phase = 'lobby';
+    room.buzzedPlayerId = null;
+    io.to(room.pin).emit('time_up', { type });
+  }
+}
+
 function startTimer(room, seconds, type) {
   clearRoomTimer(room);
   room.timeLeft = seconds;
@@ -69,10 +122,7 @@ function startTimer(room, seconds, type) {
   room.timer = setInterval(() => {
     room.timeLeft -= 1;
     if (room.timeLeft <= 0) {
-      clearRoomTimer(room);
-      room.phase = 'lobby';
-      room.buzzedPlayerId = null;
-      io.to(room.pin).emit('time_up', { type });
+      handleTimeUp(room, type); // Używamy nowej funkcji po upływie czasu
     }
   }, 1000);
 }

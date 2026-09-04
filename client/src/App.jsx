@@ -154,20 +154,22 @@ export default function App() {
     });
 
     socket.on('buzzer_unlocked', (payload = {}) => {
-      const { excludedPlayerIds } = payload;
+      const { excludedPlayerIds, timeout, failedPlayerName } = payload;
+      clearLocalTimer(); // Czyścimy licznik, żeby nie wisiało "0" na ekranie
+      
       if (roleRef.current === 'player') {
         const iAmExcluded = Array.isArray(excludedPlayerIds) && excludedPlayerIds.includes(socket.id);
         if (iAmExcluded) {
           setBuzzerDisabled(true);
-          setPlayerStatus('Źle! Czekasz na kolejną rundę.');
+          setPlayerStatus(timeout ? 'Czas minął! Czekasz na kolejną rundę.' : 'Źle! Czekasz na kolejną rundę.');
         } else {
-          setBuzzerDisabled(false);
-          setPlayerStatus('Źle! Spróbuj ponownie, kto pierwszy?');
+          setBuzzerDisabled(false); // Odblokowujemy dla innych!
+          setPlayerStatus(timeout ? `Czas minął dla gracza ${failedPlayerName}. Kto pierwszy?` : 'Źle! Spróbuj ponownie, kto pierwszy?');
         }
       }
       if (roleRef.current === 'host') {
         hideJudgePanels();
-        setHostStatus('Buzzer odblokowany dla pozostałych graczy.');
+        setHostStatus(timeout ? `Czas minął! Buzzer odblokowany dla pozostałych.` : 'Buzzer odblokowany dla pozostałych graczy.');
       }
     });
 
