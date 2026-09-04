@@ -7,6 +7,18 @@ import RoundResultBanner from './components/RoundResultBanner.jsx';
 import ConfirmModal from './components/ConfirmModal.jsx';
 import GameSummaryModal from './components/GameSummaryModal.jsx';
 
+// Klucze localStorage używane do automatycznego powrotu do gry po zerwaniu
+// połączenia (np. zminimalizowanie aplikacji na telefonie).
+const LS_HOST_PIN = 'hitster_host_pin';
+const LS_PLAYER_PIN = 'hitster_player_pin';
+const LS_PLAYER_TOKEN = 'hitster_player_token';
+
+function clearStoredSession() {
+  localStorage.removeItem(LS_HOST_PIN);
+  localStorage.removeItem(LS_PLAYER_PIN);
+  localStorage.removeItem(LS_PLAYER_TOKEN);
+}
+
 export default function App() {
   const [screen, setScreen] = useState('welcome');
   const roleRef = useRef(null);
@@ -69,16 +81,6 @@ export default function App() {
   function renderPlayers(list) {
     setPlayers(list);
   }
-
-  useEffect(() => {
-    function handleReconnect() {
-      if (roleRef.current === 'host' && currentPinRef.current) {
-        socket.emit('rejoin_host', { pin: currentPinRef.current });
-      }
-    }
-    socket.on('connect', handleReconnect);
-    return () => socket.off('connect', handleReconnect);
-  }, []);
 
   function initializePlayer(pin) {
     if (spotifyPlayerRef.current) return;
@@ -224,6 +226,7 @@ export default function App() {
       clearLocalTimer();
       setEndGameConfirmVisible(false);
       setGameSummary({ visible: true, standings, winners });
+      clearStoredSession();
     });
 
     socket.on('timer_start', ({ seconds }) => {
@@ -264,34 +267,106 @@ export default function App() {
       setJoinPrefill(invitePin);
     }
 
+    // Link powrotny ze Spotify (?room=X&host=1) zapisujemy trwale w localStorage,
+    // zamiast dołączać tylko raz - dzięki temu powrót do gry (patrz attemptRejoin
+    // poniżej) zadziała też przy KAŻDYM kolejnym zerwaniu/odzyskaniu połączenia,
+    // nie tylko przy tym pierwszym wczytaniu strony.
     if (room && isHost) {
-      socket.emit('rejoin_host', { pin: room }, (res) => {
-        if (res && res.error) {
-          alert(res.error);
-          window.location.href = '/';
-          return;
-        }
-        roleRef.current = 'host';
-        currentPinRef.current = res.pin;
-        setScreen('host');
-        setHostPin(res.pin);
-        setSpotifyLoginUrl(`/auth/login?room=${res.pin}`);
-        setInviteLink(`${window.location.origin}/?pin=${res.pin}`);
-        renderPlayers(res.players);
-
-        if (res.spotifyConnected) {
-          setSpotifyConnected(true);
-          connectSpotifyPlayer(res.pin);
-        }
-        if (res.tracksLoaded > 0) {
-          setPlaylistStatus(`Wczytano ${res.tracksLoaded} utworów.`);
-          setTracksLoaded(res.tracksLoaded);
-        }
-        window.history.replaceState({}, document.title, '/');
-      });
+      localStorage.setItem(LS_HOST_PIN, room);
+      window.history.replaceState({}, document.title, '/');
     }
 
+    // --- Ustawienie stanu gracza po (ponownym) dołączeniu, na podstawie
+    //     aktualnej fazy rundy zwróconej przez serwer. Chroni przed sytuacją,
+    //     w której przycisk buzzera zostaje trwale zablokowany po powrocie
+    //     z zablokowanego/zminimalizowanego telefonu. ---
+    function resyncPlayerFromServer(res) {
+      setMyCardCount(res.cards ? res.cards.length : 0);
+      setMyCardsDisplay(res.cards || []);
+      if (res.phase === 'buzzer') {
+        setBuzzerDisabled(false);
+        setTimelineVisible(false);
+        setPlayerStatus('Utwór leci! Kto pierwszy?');
+      } else if (res.phase === 'guessing_song' && res.isBuzzedByMe) {
+        setBuzzerDisabled(true);
+        setTimelineVisible(false);
+        setPlayerStatus('Twoja kolej! Powiedz Tytuł i Wykonawcę!');
+      } else if (res.phase === 'timeline' && res.isBuzzedByMe) {
+        setBuzzerDisabled(true);
+        setTimelineVisible(true);
+        if (res.currentGuessTrack) {
+          setCurrentGuessText(`${res.currentGuessTrack.title} - ${res.currentGuessTrack.artist}`);
+        }
+        setMyTimelineCards(res.cards || []);
+        setPlayerStatus('Poprawnie! Gdzie na osi czasu jest ten utwór?');
+      } else {
+        setBuzzerDisabled(true);
+        setTimelineVisible(false);
+        setPlayerStatus('Czekaj na kolejny utwór...');
+      }
+    }
+
+    // --- Próba powrotu do gry: wywoływana zarówno przy starcie strony, jak i
+    //     przy KAŻDYM ponownym połączeniu socket.io (np. po odblokowaniu
+    //     telefonu, powrocie z tła aplikacji, chwilowym zaniku sieci). ---
+    function attemptRejoin() {
+      const storedHostPin = localStorage.getItem(LS_HOST_PIN);
+      const storedPlayerPin = localStorage.getItem(LS_PLAYER_PIN);
+      const storedPlayerToken = localStorage.getItem(LS_PLAYER_TOKEN);
+
+      if (storedHostPin) {
+        socket.emit('rejoin_host', { pin: storedHostPin }, (res) => {
+          if (!res || res.error) {
+            clearStoredSession();
+            return;
+          }
+          roleRef.current = 'host';
+          currentPinRef.current = res.pin;
+          setScreen('host');
+          setHostPin(res.pin);
+          setSpotifyLoginUrl(`/auth/login?room=${res.pin}`);
+          setInviteLink(`${window.location.origin}/?pin=${res.pin}`);
+          renderPlayers(res.players);
+
+          if (res.spotifyConnected) {
+            setSpotifyConnected(true);
+            connectSpotifyPlayer(res.pin);
+          }
+          if (res.tracksLoaded > 0) {
+            setPlaylistStatus(`Wczytano ${res.tracksLoaded} utworów.`);
+            setTracksLoaded(res.tracksLoaded);
+          }
+        });
+      } else if (storedPlayerPin && storedPlayerToken) {
+        socket.emit('join_room', { pin: storedPlayerPin, token: storedPlayerToken }, (res) => {
+          if (!res || res.error) {
+            clearStoredSession();
+            return;
+          }
+          roleRef.current = 'player';
+          currentPinRef.current = storedPlayerPin;
+          localStorage.setItem(LS_PLAYER_TOKEN, res.token);
+          setScreen('player');
+          resyncPlayerFromServer(res);
+        });
+      }
+    }
+
+    socket.on('connect', attemptRejoin);
+    if (socket.connected) attemptRejoin();
+
+    // Gdy telefon wraca z tła/zablokowanego ekranu, spróbuj od razu wymusić
+    // ponowne połączenie zamiast czekać na automatyczny backoff socket.io.
+    function handleVisibilityChange() {
+      if (document.visibilityState === 'visible' && !socket.connected) {
+        socket.connect();
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
+      socket.off('connect', attemptRejoin);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       socket.off('player_ready');
       socket.off('now_playing_host');
       socket.off('players_update');
@@ -316,6 +391,8 @@ export default function App() {
       setSpotifyLoginUrl(`/auth/login?room=${res.pin}`);
       setInviteLink(`${window.location.origin}/?pin=${res.pin}`);
       setScreen('host');
+      clearStoredSession();
+      localStorage.setItem(LS_HOST_PIN, res.pin);
     });
   }
 
@@ -334,6 +411,9 @@ export default function App() {
       currentPinRef.current = pin;
       setPlayerStatus('Czekaj, aż host odtworzy utwór...');
       setScreen('player');
+      clearStoredSession();
+      localStorage.setItem(LS_PLAYER_PIN, pin);
+      localStorage.setItem(LS_PLAYER_TOKEN, res.token);
     });
   }
 
