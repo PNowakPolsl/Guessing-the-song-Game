@@ -155,7 +155,7 @@ export default function App() {
 
     socket.on('buzzer_unlocked', (payload = {}) => {
       const { excludedPlayerIds, timeout, failedPlayerName } = payload;
-      clearLocalTimer(); // Czyścimy licznik, żeby nie wisiało "0" na ekranie
+      clearLocalTimer(); 
       
       if (roleRef.current === 'player') {
         const iAmExcluded = Array.isArray(excludedPlayerIds) && excludedPlayerIds.includes(socket.id);
@@ -163,7 +163,7 @@ export default function App() {
           setBuzzerDisabled(true);
           setPlayerStatus(timeout ? 'Czas minął! Czekasz na kolejną rundę.' : 'Źle! Czekasz na kolejną rundę.');
         } else {
-          setBuzzerDisabled(false); // Odblokowujemy dla innych!
+          setBuzzerDisabled(false); 
           setPlayerStatus(timeout ? `Czas minął dla gracza ${failedPlayerName}. Kto pierwszy?` : 'Źle! Spróbuj ponownie, kto pierwszy?');
         }
       }
@@ -354,16 +354,20 @@ export default function App() {
     setHostPhase('game');
   }
 
-  // --- POPRAWKA: Przycisk odzyskuje sprawność w razie błędu! ---
   function handlePlayRandom() {
     setPlayRandomDisabled(true); 
     socket.emit('play_random_track', { pin: currentPinRef.current }, (res) => {
       if (res && res.error) {
         setHostStatus(res.error);
-        setPlayRandomDisabled(false); // ODBLOKOWUJEMY PRZYCISK
+        setPlayRandomDisabled(false); 
       }
     });
     hideJudgePanels();
+  }
+
+  // --- NOWOŚĆ: Przesłanie komendy pominięcia ---
+  function handleSkipTrack() {
+    socket.emit('skip_track', { pin: currentPinRef.current });
   }
 
   function handleTogglePlayback(action) {
@@ -446,6 +450,7 @@ export default function App() {
           onJudgeSong={handleJudgeSong}
           onJudgeTimeline={handleJudgeTimeline}
           onRequestEndGame={handleRequestEndGame}
+          onSkipTrack={handleSkipTrack}  /* PRZEKAZANY PROP */
         />
       )}
 

@@ -62,15 +62,13 @@ function publicPlayers(room) {
   }));
 }
 
-// --- NOWA LOGIKA CZASU (server.js) ---
-
+// --- NOWA LOGIKA CZASU ---
 function handleTimeUp(room, type) {
   clearRoomTimer(room);
   const playerId = room.buzzedPlayerId;
   const player = playerId ? room.players[playerId] : null;
 
   if (type === 'song_guess' && room.phase === 'guessing_song') {
-    // Ktoś nie zdążył zgadnąć piosenki -> traktujemy to jak błąd
     if (playerId) room.excludedPlayerIds.add(playerId);
     room.buzzedPlayerId = null;
 
@@ -78,7 +76,6 @@ function handleTimeUp(room, type) {
     const everyoneExcluded = activePlayers.length > 0 && activePlayers.every((id) => room.excludedPlayerIds.has(id));
 
     if (everyoneExcluded) {
-      // Wszyscy już próbowali lub nikogo nie ma
       room.phase = 'lobby';
       io.to(room.pin).emit('round_result', {
         playerId: null,
@@ -88,16 +85,14 @@ function handleTimeUp(room, type) {
         players: publicPlayers(room),
       });
     } else {
-      // Są inni gracze, odblokowujemy buzzer dla reszty!
       room.phase = 'buzzer';
       io.to(room.pin).emit('buzzer_unlocked', { 
         excludedPlayerIds: [...room.excludedPlayerIds],
-        timeout: true, // Flaga dla frontendu, żeby wiedział, że to z powodu czasu
+        timeout: true,
         failedPlayerName: player ? player.name : ''
       });
     }
   } else if (type === 'timeline_guess' && room.phase === 'timeline') {
-    // Ktoś nie zdążył ułożyć na osi czasu -> traci punkt
     room.phase = 'lobby';
     room.buzzedPlayerId = null;
     io.to(room.pin).emit('round_result', {
@@ -108,7 +103,6 @@ function handleTimeUp(room, type) {
       players: publicPlayers(room),
     });
   } else {
-    // Awaryjne zakończenie czasu
     room.phase = 'lobby';
     room.buzzedPlayerId = null;
     io.to(room.pin).emit('time_up', { type });
@@ -122,7 +116,7 @@ function startTimer(room, seconds, type) {
   room.timer = setInterval(() => {
     room.timeLeft -= 1;
     if (room.timeLeft <= 0) {
-      handleTimeUp(room, type); // Używamy nowej funkcji po upływie czasu
+      handleTimeUp(room, type);
     }
   }, 1000);
 }
@@ -213,7 +207,7 @@ async function ensureFreshToken(room) {
 }
 
 app.get('/auth/token/:pin', async (req, res) => {
-  const room = rooms[req.params.pin];
+  const room = rooms[pin = req.params.pin];
   if (!room) return res.status(404).json({ error: 'Pokój nie istnieje.' });
   try {
     const token = await ensureFreshToken(room);
@@ -343,27 +337,18 @@ io.on('connection', (socket) => {
 
     try {
       const token = await ensureFreshToken(room);
-      
       const devResp = await axios.get('https://api.spotify.com/v1/me/player/devices', {
         headers: { Authorization: `Bearer ${token}` }
       });
       const devices = devResp.data.devices || [];
 
-      // KOLEJKA PRIORYTETOWA - Nowy mechanizm wybudzania uśpionych apek!
       let devicesToTry = [];
-      
-      // 1. Najważniejsze: Próbujemy BEZ podawania ID. To zmusza serwery Spotify 
-      // do wysłania cichego powiadomienia wybudzającego (push) na Twój telefon!
       devicesToTry.push(null);
-      
-      // 2. Jeśli serwer nie domyślił się urządzenia, próbujemy użyć tego z poprzedniej rundy
       if (room.activeDeviceId) devicesToTry.push(room.activeDeviceId);
       
-      // 3. Aktywne urządzenie (jeśli widnieje)
       const active = devices.find(d => d.is_active);
       if (active && !devicesToTry.includes(active.id)) devicesToTry.push(active.id);
       
-      // 4. Smartfony znalezione na liście
       const smartphones = devices.filter(d => d.type === 'Smartphone');
       for (let sp of smartphones) {
         if (!devicesToTry.includes(sp.id)) devicesToTry.push(sp.id); 
@@ -381,17 +366,16 @@ io.on('connection', (socket) => {
             { headers: { Authorization: `Bearer ${token}` } }
           );
           
-          if (devId) room.activeDeviceId = devId; // Aktualizujemy działające ID
+          if (devId) room.activeDeviceId = devId; 
           played = true;
-          break; // Odtwarza się! Uciekamy z pętli.
+          break; 
         } catch (err) {
           lastErrorMessage = err.response?.data?.error?.message || err.message;
-          console.error(`Odrzucono na urządzeniu ${devId || 'domyślnym'}:`, lastErrorMessage);
         }
       }
 
       if (!played) {
-        room.usedTrackIds.delete(track.id); // Cofamy piosenkę, żeby nie przepadła!
+        room.usedTrackIds.delete(track.id); 
         room.phase = 'lobby';
         return cb && cb({ error: 'Urządzenie uśpiło odtwarzacz. Niestety musisz wejść na sekundę w aplikację Spotify.' });
       }
@@ -412,7 +396,6 @@ io.on('connection', (socket) => {
     cb && cb({ success: true });
   });
 
-  // Trik nr 2: Pauza i Play wysyłane W CIEMNO, bez sztywnego ID urządzenia.
   socket.on('toggle_playback', async ({ pin, action }) => {
     const room = rooms[pin];
     if (!room || socket.id !== room.hostSocketId) return;
@@ -441,6 +424,28 @@ io.on('connection', (socket) => {
       console.error('Błąd automatycznej pauzy:', err.response?.data || err.message);
     }
   }
+
+  // --- NOWOŚĆ: Funkcja pomijania utworu ---
+  socket.on('skip_track', async ({ pin }) => {
+    const room = rooms[pin];
+    if (!room || socket.id !== room.hostSocketId) return;
+    if (room.phase === 'lobby') return; // Nie ma czego pomijać
+
+    clearRoomTimer(room);
+    await pauseSpotifyPlayback(room); // Zatrzymujemy muzykę
+
+    room.phase = 'lobby';
+    room.buzzedPlayerId = null;
+
+    // Rozsyłamy informację, że nikt nie dostał punktu, ale pokazujemy co to było
+    io.to(pin).emit('round_result', {
+      playerId: null,
+      playerName: null,
+      correct: false,
+      track: room.currentTrack,
+      players: publicPlayers(room),
+    });
+  });
 
   socket.on('buzz', async ({ pin }) => {
     const room = rooms[pin];
@@ -556,7 +561,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// --- OBSŁUGA FRONTENDU (REACT) ---
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'client/dist', 'index.html'));
 });

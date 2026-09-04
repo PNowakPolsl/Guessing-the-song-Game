@@ -25,15 +25,14 @@ export default function HostScreen({
   onJudgeSong,
   onJudgeTimeline,
   onRequestEndGame,
+  onSkipTrack, // <--- NOWY PROP
 }) {
   const [playlistUrl, setPlaylistUrl] = useState('');
   const [copied, setCopied] = useState(false);
 
-  // --- STANY DLA FISZEK ---
   const [songRevealed, setSongRevealed] = useState(false);
   const [yearRevealed, setYearRevealed] = useState(false);
 
-  // Automatyczny reset fiszek, gdy zmienia się piosenka (nowPlaying)
   useEffect(() => {
     setSongRevealed(false);
     setYearRevealed(false);
@@ -150,7 +149,6 @@ export default function HostScreen({
                 <p className="now-playing-tag">Teraz gra (Fiszka)</p>
                 
                 {judgeTimelineVisible ? (
-                  // FAZA 2: Zgadywanie na osi czasu. Tytuł na stałe, Rok to fiszka.
                   <>
                     <div style={{ textAlign: 'center' }}>
                       <p className="now-playing-title">{nowPlaying.title}</p>
@@ -169,7 +167,6 @@ export default function HostScreen({
                     )}
                   </>
                 ) : (
-                  // FAZA 1: Zgadywanie utworu. Tytuł i autor to fiszka, rok jest niewidoczny.
                   <>
                     {songRevealed ? (
                       <div onClick={() => setSongRevealed(false)} style={{ cursor: 'pointer', padding: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', width: '100%', textAlign: 'center' }}>
@@ -195,6 +192,17 @@ export default function HostScreen({
                 ▶️ Wznów
               </button>
             </div>
+
+            {/* --- NOWY PRZYCISK SKIPOWANIA RUNDY --- */}
+            {nowPlaying && (
+              <button 
+                className="btn btn-ghost btn-sm" 
+                style={{ width: '100%', marginTop: '4px', color: 'var(--spotify-text-subdued)', border: '1px solid #333' }} 
+                onClick={onSkipTrack}
+              >
+                ⏭ Pomiń utwór (nikt nie punktuje)
+              </button>
+            )}
 
             <p className="status-text">{status}</p>
             {timer !== null && <p className="timer-text">{timer}</p>}
