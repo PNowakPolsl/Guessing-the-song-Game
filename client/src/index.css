@@ -29,6 +29,10 @@ html,
 body,
 #root {
   height: 100%;
+  width: 100%;
+  /* CAŁKOWITA BLOKADA LATAJĄCEGO EKRANU */
+  overflow: hidden; 
+  overscroll-behavior: none; 
 }
 
 body {
@@ -37,28 +41,44 @@ body {
   color: var(--spotify-text);
   font-family: 'Helvetica Neue', Helvetica, Arial, 'Segoe UI', system-ui, sans-serif;
   -webkit-tap-highlight-color: transparent;
+  
+  /* BLOKADA ZAZNACZANIA TEKSTU PRZY SZYBKIM KLIKANIU */
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 button {
   font-family: inherit;
   cursor: pointer;
   border: none;
+  /* DODATKOWA OPTYMALIZACJA PRZYCISKÓW (BRAK OPÓŹNIEŃ) */
+  touch-action: manipulation;
 }
 
 input {
   font-family: inherit;
+  /* Zezwalamy na zaznaczanie tekstu tylko w polach wpisywania */
+  -webkit-user-select: auto;
+  user-select: auto;
 }
 
 .app-shell {
   width: 100%;
   max-width: 500px;
   margin: 0 auto;
-  min-height: 100vh;
+  
+  /* Przewijanie dozwolone tylko wewnątrz kontenera */
+  height: 100%;
+  overflow-y: auto; 
+  overscroll-behavior-y: contain;
+  
   display: flex;
   flex-direction: column;
   padding: 20px 16px env(safe-area-inset-bottom, 32px);
   position: relative;
 }
+
+/* ... RESZTA TWOJEGO KODU CSS POZOSTAJE BEZ ZMIAN (np. .brand itd.) ... */
 
 /* ---------- Typografia / logo ---------- */
 
